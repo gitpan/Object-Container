@@ -21,6 +21,7 @@ no_index:
 requires:
   Any::Moose: 0.07
   Class::Singleton: 0
+  Exporter::AutoClean: 0
 resources:
   license: http://dev.perl.org/licenses/
-version: 0.02001
+version: 0.03
