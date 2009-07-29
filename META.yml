@@ -4,6 +4,7 @@ author:
   - 'Daisuke Murase <typester@cpan.org>'
 build_requires:
   ExtUtils::MakeMaker: 6.42
+  Test::Exception: 0
   Test::More: 0
 configure_requires:
   ExtUtils::MakeMaker: 6.42
@@ -24,4 +25,4 @@ requires:
   Exporter::AutoClean: 0
 resources:
   license: http://dev.perl.org/licenses/
-version: 0.03001
+version: 0.03002
