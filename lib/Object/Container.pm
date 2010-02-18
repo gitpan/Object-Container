@@ -4,7 +4,7 @@ use Any::Moose;
 use Carp;
 use Exporter::AutoClean;
 
-our $VERSION = '0.05001';
+our $VERSION = '0.06';
 
 extends any_moose('::Object'), 'Class::Singleton';
 
@@ -65,7 +65,15 @@ sub register {
         };
     }
 
+    $self->unregister($class);
     $self->registered_classes->{$class} = $initializer;
+}
+
+sub unregister {
+    my ($self, $class) = @_;
+    $self = $self->instance unless ref $self;
+
+    delete $self->registered_classes->{$class} and $self->remove($class);
 }
 
 sub get {
@@ -77,6 +85,12 @@ sub get {
     } or croak qq["$class" is not registered in @{[ ref $self ]}];
 }
 
+sub remove {
+    my ($self, $class) = @_;
+    $self = $self->instance unless ref $self;
+    delete $self->objects->{ $class };
+}
+
 sub ensure_class_loaded {
     my ($self, $class) = @_;
     Any::Moose::load_class($class) unless Any::Moose::is_class_loaded($class);
@@ -86,7 +100,7 @@ __PACKAGE__->meta->make_immutable;
 
 __END__
 
-=for stopwords DSL OO runtime singletonize
+=for stopwords DSL OO runtime singletonize unregister
 
 =head1 NAME
 
@@ -260,12 +274,21 @@ With last way you can pass any name to first argument instead of class name.
     Object::Container->register('ua1', sub { LWP::UserAgent->new });
     Object::Container->register('ua2', sub { LWP::UserAgent->new });
 
+=head2 unregister($class_or_name)
+
+Unregister classes from container.
 
 =head2 get($class_or_name)
 
 Get the object that registered by 'register' method.
 
 First argument is same as 'register' method.
+
+=head2 remove($class_or_name)
+
+Remove the cached object that is created at C<get> method above.
+
+Return value is the deleted object if it's exists.
 
 =head2 ensure_class_loaded($class)
 
