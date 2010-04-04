@@ -27,4 +27,4 @@ requires:
 resources:
   license: http://dev.perl.org/licenses/
   repository: git://github.com/typester/object-container-perl.git
-version: 0.06
+version: 0.07
