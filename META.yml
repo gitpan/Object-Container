@@ -18,15 +18,14 @@ no_index:
     - inc
     - t
     - xt
+recommends:
+  Exporter::AutoClean: 0
 requires:
   Carp: 0
   Class::Accessor::Fast: 0
-  Class::Singleton: 0
-  Data::Util: 0
-  Exporter::AutoClean: 0
   Filter::Util::Call: 0
   parent: 0
 resources:
   license: http://dev.perl.org/licenses/
   repository: git://github.com/typester/object-container-perl.git
-version: 0.09_01
+version: 0.09

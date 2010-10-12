@@ -2,49 +2,76 @@ package Object::Container;
 
 use strict;
 use warnings;
-use parent qw(Class::Accessor::Fast Class::Singleton);
-
+use parent qw(Class::Accessor::Fast);
 use Carp;
-use Data::Util qw(is_invocant);
-use Exporter::AutoClean;
 
-our $VERSION = '0.09_01';
+our $VERSION = '0.09';
 
 __PACKAGE__->mk_accessors(qw/registered_classes objects/);
 
-sub import {
-    my ($class, $name) = @_;
-    return unless $name;
+do {
+    my @EXPORTS;
 
-    my $caller = caller;
-    {
-        no strict 'refs';
-        if ($name =~ /^-base$/i) {
-            push @{"${caller}::ISA"}, $class;
-            my $r = $class->can('register');
-            Exporter::AutoClean->export(
-                $caller,
-                register => sub { $r->($caller, @_) },
-                preload  => sub {
-                    $caller->instance->get($_) for @_;
-                },
-                preload_all_except => sub {
-                    $caller->instance->load_all_except(@_);
-                },
-                preload_all => sub {
-                    $caller->instance->load_all;
-                },
-            );
+    sub import {
+        my ($class, $name) = @_;
+        return unless $name;
 
-        }
-        else {
+        my $caller = caller;
+        {
             no strict 'refs';
-            *{"${caller}::${name}"} = sub {
-                my ($target) = @_;
-                return $target ? $class->get($target) : $class;
-            };
+            if ($name =~ /^-base$/i) {
+                push @{"${caller}::ISA"}, $class;
+                my $r = $class->can('register');
+    
+                my %exports = (
+                    register => sub { $r->($caller, @_) },
+                    preload  => sub {
+                        $caller->instance->get($_) for @_;
+                    },
+                    preload_all_except => sub {
+                        $caller->instance->load_all_except(@_);
+                    },
+                    preload_all => sub {
+                        $caller->instance->load_all;
+                    },
+                );
+    
+                if (eval q[use Exporter::AutoClean; 1]) {
+                    Exporter::AutoClean->export( $caller, %exports );
+                }
+                else {
+                    while (my ($name, $fn) = each %exports) {
+                        *{"${caller}::${name}"} = $fn;
+                    }
+                    @EXPORTS = keys %exports;
+                }
+            }
+            else {
+                no strict 'refs';
+                *{"${caller}::${name}"} = sub {
+                    my ($target) = @_;
+                    return $target ? $class->get($target) : $class;
+                };
+            }
         }
     }
+
+    sub unimport {
+        my $caller = caller;
+
+        no strict 'refs';
+        for my $name (@EXPORTS) {
+            delete ${ $caller . '::' }{ $name };
+        }
+
+        1; # for EOF
+    }
+};
+
+my %INSTANCES;
+sub instance {
+    my $class = shift;
+    return $INSTANCES{$class} ||= $class->new;
 }
 
 sub new {
@@ -54,27 +81,46 @@ sub new {
     } );
 }
 
-# override Class::Singleton initializer
-sub _new_instance {
-    $_[0]->new;
-}
-
 sub register {
-    my ($self, $class, @rest) = @_;
+    my ($self, $args, @rest) = @_;
     $self = $self->instance unless ref $self;
 
-    my $initializer;
-    if (@rest == 1 and ref($rest[0]) eq 'CODE') {
-        $initializer = $rest[0];
+    my ($class, $initializer, $is_preload);
+    if (defined $args && !ref $args) {
+        $class = $args;
+        if (@rest == 1 and ref $rest[0] eq 'CODE') {
+            $initializer = $rest[0];
+        }
+        else {
+            $initializer = sub {
+                $self->ensure_class_loaded($class);
+                $class->new(@rest);
+            };
+        }
+    }
+    elsif (ref $args eq 'HASH') {
+        $class = $args->{class};
+        $args->{args} ||= [];
+        if (ref $args->{initializer} eq 'CODE') {
+            $initializer = $args->{initializer};
+        }
+        else {
+            $initializer = sub {
+                $self->ensure_class_loaded($class);
+                $class->new(@{$args->{args}});
+            };
+        }
+
+        $is_preload = 1 if $args->{preload};
     }
     else {
-        $initializer = sub {
-            $self->ensure_class_loaded($class);
-            $class->new(@rest);
-        };
+        croak "Usage: $self->register($class || { class => $class ... })";
     }
 
     $self->registered_classes->{$class} = $initializer;
+    $self->get($class) if $is_preload;
+    
+    return $initializer;
 }
 
 sub unregister {
@@ -106,6 +152,7 @@ sub load_all {
 
 sub load_all_except {
     my ($self, @except) = @_;
+    $self = $self->instance unless ref $self;
 
     for my $class (keys %{ $self->registered_classes }) {
         next if grep { $class eq $_ } @except;
@@ -113,18 +160,55 @@ sub load_all_except {
     }
 }
 
-# taken from Mouse::Uti
+# taken from Mouse
+sub _is_class_loaded {
+    my $class = shift;
+
+    return 0 if ref($class) || !defined($class) || !length($class);
+
+    # walk the symbol table tree to avoid autovififying
+    # \*{${main::}{"Foo::"}{"Bar::"}} == \*main::Foo::Bar::
+
+    my $pack = \%::;
+    foreach my $part (split('::', $class)) {
+        $part .= '::';
+        return 0 if !exists $pack->{$part};
+
+        my $entry = \$pack->{$part};
+        return 0 if ref($entry) ne 'GLOB';
+        $pack = *{$entry}{HASH};
+    }
+
+    return 0 if !%{$pack};
+
+    # check for $VERSION or @ISA
+    return 1 if exists $pack->{VERSION}
+             && defined *{$pack->{VERSION}}{SCALAR} && defined ${ $pack->{VERSION} };
+    return 1 if exists $pack->{ISA}
+             && defined *{$pack->{ISA}}{ARRAY} && @{ $pack->{ISA} } != 0;
+
+    # check for any method
+    foreach my $name( keys %{$pack} ) {
+        my $entry = \$pack->{$name};
+        return 1 if ref($entry) ne 'GLOB' || defined *{$entry}{CODE};
+    }
+
+    # fail
+    return 0;
+}
+
+
 sub _try_load_one_class {
     my $class = shift;
 
-    return '' if is_invocant($class);
-
-    $class  =~ s{::}{/}g;
-    $class .= '.pm';
+    return '' if _is_class_loaded($class);
+    my $klass = $class;
+    $klass  =~ s{::}{/}g;
+    $klass .= '.pm';
 
     return do {
         local $@;
-        eval { require $class };
+        eval { require $klass };
         $@;
     };
 }
@@ -140,7 +224,7 @@ sub ensure_class_loaded {
 1;
 __END__
 
-=for stopwords DSL OO runtime singletonize unregister
+=for stopwords DSL OO runtime singletonize unregister preload
 
 =head1 NAME
 
@@ -285,11 +369,17 @@ In that case, only LWP::UserAgent and HTTP::Cookies are initialized.
 
 =head2 new
 
-Do not use it. use instance method.
+Create new object.
+
+=head2 instance
+
+Create singleton object and return it.
 
 =head2 register( $class, @args )
 
 =head2 register( $class_or_name, $initialize_code )
+
+=head2 register( { class => $class_or_name ... } )
 
 Register classes to container.
 
@@ -318,6 +408,36 @@ With last way you can pass any name to first argument instead of class name.
     Object::Container->register('ua1', sub { LWP::UserAgent->new });
     Object::Container->register('ua2', sub { LWP::UserAgent->new });
 
+If you want to initialize and register at the same time, the following can.
+
+    Object::Container->register({ class => 'LWP::UserAgent', preload => 1 });
+
+I<initializer> option can be specified.
+
+    Object::Container->register({ class => 'WWW::Mechanize', initializer => sub {
+        my $mech = WWW::Mechanize->new( stack_depth );
+        $mech->agent_alias('Windows IE 6');
+        return $mech;
+    }, preload => 1 });
+
+This is the same as written below.
+
+    Object::Container->register('WWW::Mechanize', sub {
+        my $mech = WWW::Mechanize->new( stack_depth );
+        $mech->agent_alias('Windows IE 6');
+        return $mech;
+    });
+    Object::Container->get('WWW::Mechanize');
+
+If you specify I<args> option is:
+
+    Object::Container->register({ class => 'LWP::UserAgent', args => \@args, preload => 1 });
+
+It is, as you know, the same below.
+
+    Object::Container->register('LWP::UserAgent', @args);
+    Object::Container->get('LWP::UserAgent');
+
 =head2 unregister($class_or_name)
 
 Unregister classes from container.
@@ -339,6 +459,36 @@ Return value is the deleted object if it's exists.
 This is utility method that load $class if $class is not loaded.
 
 It's useful when you want include dependency in initializer and want lazy load the modules.
+
+=head2 load_all
+
+=head2 load_all_except(@classes_or_names)
+
+This module basically does lazy object initializations, but in some situation, for Copy-On-Write or for runtime speed for example, you might want to preload objects.
+For the purpose C<load_all> and C<load_all_except> method are exists.
+
+    Object::Container->load_all;
+
+This method is load all registered object at once.
+
+Also if you have some objects that keeps lazy loading, do like following:
+
+    Object::Container->load_all_except(qw/Foo Bar/);
+
+This means all objects except 'Foo' and 'Bar' are loaded.
+
+=head1 EXPORT FUNCTIONS ON SUBCLASS INTERFACE
+
+Same functions for C<load_all> and C<load_all_except> exists at subclass interface.
+Below is list of these functions.
+
+=head2 preload(@classes_or_names)
+
+=head2 preload_all
+
+=head2 preload_all_except
+
+As predictable by name, C<preload_all> is equals to C<load_all> and C<preload_all_except> is equals to <load_all_except>.
 
 =head1 SEE ALSO
 
