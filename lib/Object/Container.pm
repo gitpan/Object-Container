@@ -5,7 +5,7 @@ use warnings;
 use parent qw(Class::Accessor::Fast);
 use Carp;
 
-our $VERSION = '0.10';
+our $VERSION = '0.11';
 
 __PACKAGE__->mk_accessors(qw/registered_classes objects/);
 
@@ -36,7 +36,7 @@ do {
                     },
                 );
     
-                if (eval q[use Exporter::AutoClean; 1]) {
+                if (eval q[use Exporter::AutoClean]) {
                     Exporter::AutoClean->export( $caller, %exports );
                 }
                 else {
