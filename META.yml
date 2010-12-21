@@ -4,6 +4,7 @@ author:
   - 'Daisuke Murase <typester@cpan.org>'
 build_requires:
   ExtUtils::MakeMaker: 6.42
+  Test::Requires: 0
 configure_requires:
   ExtUtils::MakeMaker: 6.42
 distribution_type: module
@@ -28,4 +29,4 @@ requires:
 resources:
   license: http://dev.perl.org/licenses/
   repository: git://github.com/typester/object-container-perl.git
-version: 0.13
+version: 0.14
